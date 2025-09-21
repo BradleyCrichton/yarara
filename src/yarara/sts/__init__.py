@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import glob as glob
+import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, TypedDict
+from typing import Any, Dict, Optional, Set, Tuple, TypedDict, cast
 
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
 from ..iofun import pickle_dump
+from .star_type import (
+    apply_spectral_type_defaults,
+    create_default_star_info,
+    select_ccf_mask,
+)
 
 
 class SIF_float_telluric(TypedDict, total=False):
@@ -306,38 +312,7 @@ class spec_time_series(object):
             os.system("mkdir " + self.dir_root + "STAR_INFO/")
 
         if not os.path.exists(self.dir_root + "STAR_INFO/Stellar_info_" + self.starname + ".p"):
-            dico: StarInfo = {
-                "Name": self.starname,
-                "Simbad_name": {"fixed": "-"},
-                "Sp_type": {"fixed": "G2V"},
-                "Ra": {"fixed": "00 00 00.0000"},
-                "Dec": {"fixed": "00 00 00.0000"},
-                "Pma": {"fixed": 0.0},
-                "Pmd": {"fixed": 0.0},
-                "Rv_sys": {"fixed": 0.0},
-                "Mstar": {"fixed": 1.0},
-                "Rstar": {"fixed": 1.0},
-                "magU": {"fixed": -26.0},
-                "magB": {"fixed": -26.2},
-                "magV": {"fixed": -26.8},
-                "magR": {"fixed": -26.8},
-                "UB": {"fixed": 0.0},
-                "BV": {"fixed": 0.6},
-                "VR": {"fixed": 0.0},
-                "Dist_pc": {"fixed": 0.0},
-                "Teff": {"fixed": 5775},
-                "Log_g": {"fixed": 4.5},
-                "FeH": {"fixed": 0.0},
-                "Vsini": {"fixed": 2.0},
-                "Vmicro": {"fixed": 1.0},
-                "Prot": {"fixed": 25},
-                "Pmag": {"fixed": 11},
-                "FWHM": {"fixed": 6.0},
-                "Contrast": {"fixed": 0.5},
-                "CCF_delta": {"fixed": 5},
-                "stellar_template": {"fixed": "MARCS_T5750_g4.5"},
-            }
-
+            dico = create_default_star_info(self.starname)
             pickle_dump(
                 dico,
                 open(
@@ -347,8 +322,7 @@ class spec_time_series(object):
             )
 
         self.import_star_info()
-        sp = self.star_info["Sp_type"]["fixed"][0]
-        self.mask_harps = ["G2", "K5", "M2"][int((sp == "K") | (sp == "M")) + int(sp == "M")]
+        self._refresh_star_type_configuration()
         if "YARARA" in self.star_info["FWHM"]:
             self.fwhm = self.star_info["FWHM"]["YARARA"]
         else:
@@ -468,3 +442,35 @@ class spec_time_series(object):
 
         # from yarara_check_fwhm
         self.warning_rv_borders: bool = None  # type: ignore
+
+    def _available_ccf_masks(self) -> Set[str]:
+        return {mask.stem for mask in self.mask_ccf_folder.glob("*.txt")}
+
+    def _update_mask_from_star_info(self) -> None:
+        sp_type_entry = self.star_info.get("Sp_type", {})
+        if isinstance(sp_type_entry, dict):
+            sp_type_value = cast(Optional[str], sp_type_entry.get("fixed"))
+        else:
+            sp_type_value = cast(Optional[str], sp_type_entry)
+
+        available_masks = self._available_ccf_masks()
+        try:
+            mask, desired_mask = select_ccf_mask(sp_type_value, available_masks)
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                f"No CCF mask files found in {self.mask_ccf_folder}"
+            ) from exc
+
+        if mask != desired_mask:
+            logging.warning(
+                "CCF mask '%s' not available; using '%s' for spectral type '%s'.",
+                desired_mask,
+                mask,
+                sp_type_value or "unknown",
+            )
+
+        self.mask_harps = mask
+
+    def _refresh_star_type_configuration(self) -> None:
+        apply_spectral_type_defaults(self.star_info)
+        self._update_mask_from_star_info()
