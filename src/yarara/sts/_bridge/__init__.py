@@ -48,13 +48,12 @@ def yarara_simbad_query(self: spec_time_series, starname=None) -> None:
                 for kw2 in dico2[kw].keys():
                     dico[kw][kw2] = dico2[kw][kw2]
 
+    self._refresh_star_type_configuration()
+
     pickle_dump(
         dico,
         open(self.dir_root + "STAR_INFO/Stellar_info_" + self.starname + ".p", "wb"),
     )
-
-    sp = dico["Sp_type"]["fixed"]
-    self.mask_harps = ["G2", "K5", "M2"][int((sp[0] == "K") | (sp[0] == "M")) + int(sp[0] == "M")]
 
     del dico["Name"]
 
